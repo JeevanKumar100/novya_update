@@ -24,7 +24,7 @@ pipeline {
         // replace 'docker-registry-creds' with your Jenkins credentials id
         withCredentials([usernamePassword(credentialsId: 'docker-registry-creds', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
           sh '''
-          echo "$REG_PASS" | docker login srikrishna206 -u "$REG_USER" --password-stdin
+          echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin
           docker push srikrishna206/novya-backend:latest
           docker push srikrishna206/novya-ai-backend:latest
           docker push srikrishna206/novya-frontend:latest
