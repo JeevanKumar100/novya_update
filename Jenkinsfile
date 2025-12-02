@@ -12,9 +12,9 @@ pipeline {
     stage('Build images') {
       steps {
         sh '''
-        docker build -t registry.example.com/novya-backend:latest ./backend
-        docker build -t registry.example.com/novya-ai-backend:latest ./backend/ai_backend
-        docker build -t registry.example.com/novya-frontend:latest ./novya-frontend-main
+        docker build -t srikrishna206/novya-backend:latest ./backend
+        docker build -t srikrishna206/novya-ai-backend:latest ./backend/ai_backend
+        docker build -t srikrishna206/novya-frontend:latest ./novya-frontend-main
         '''
       }
     }
@@ -25,9 +25,9 @@ pipeline {
         withCredentials([usernamePassword(credentialsId: 'docker-registry-creds', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
           sh '''
           echo "$REG_PASS" | docker login registry.example.com -u "$REG_USER" --password-stdin
-          docker push registry.example.com/novya-backend:latest
-          docker push registry.example.com/novya-ai-backend:latest
-          docker push registry.example.com/novya-frontend:latest
+          docker push srikrishna206/novya-backend:latest
+          docker push srikrishna206/novya-ai-backend:latest
+          docker push srikrishna206/novya-frontend:latest
           '''
         }
       }
