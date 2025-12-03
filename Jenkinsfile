@@ -2,29 +2,39 @@ pipeline {
   agent any
 
   stages {
+
     stage('Checkout') {
       steps {
-        // clone your repo so docker-compose.yml is available in workspace
         git url: 'https://github.com/srikrishna206/novya_update.git', branch: 'main'
       }
     }
 
     stage('Build images') {
       steps {
-        sh '''
-        docker build -t srikrishna206/novya-backend:latest ./backend
-        docker build -t srikrishna206/novya-ai-backend:latest ./backend/ai_backend
-        docker build -t srikrishna206/novya-frontend:latest ./novya-frontend-main
-        '''
+        // Pass AI key only to AI backend build (optional)
+        withCredentials([
+          string(credentialsId: 'novya-ai-key', variable: 'AI_KEY')
+        ]) {
+          sh '''
+          docker build -t srikrishna206/novya-backend:latest ./backend
+
+          docker build --build-arg AI_KEY="$AI_KEY" \
+            -t srikrishna206/novya-ai-backend:latest ./backend/ai_backend
+
+          docker build -t srikrishna206/novya-frontend:latest ./novya-frontend-main
+          '''
+        }
       }
     }
 
     stage('Push images') {
       steps {
-        // replace 'docker-registry-creds' with your Jenkins credentials id
-        withCredentials([usernamePassword(credentialsId: 'docker-registry-creds', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
+        withCredentials([
+          usernamePassword(credentialsId: 'docker-registry-creds', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')
+        ]) {
           sh '''
           echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin
+
           docker push srikrishna206/novya-backend:latest
           docker push srikrishna206/novya-ai-backend:latest
           docker push srikrishna206/novya-frontend:latest
@@ -35,16 +45,35 @@ pipeline {
 
     stage('Deploy (docker compose on Jenkins)') {
       steps {
-        sh '''
-        # Ensure we are in workspace where docker-compose.yml exists
-        pwd
-        ls -la
 
-        # Bring down old containers, pull latest images, and start upgraded stack
-        docker compose down || true
-        docker compose pull || true
-        docker compose --env-file .env up -d
-        '''
+        // <-- This block creates .env file
+        withCredentials([
+          string(credentialsId: 'novya-ai-key', variable: 'AI_KEY'),
+          string(credentialsId: 'novya-secret-key', variable: 'SECRET_KEY')
+        ]) {
+
+          sh '''
+          echo "===== Creating .env file ====="
+
+          cat > .env <<EOF
+AI_API_KEY=${AI_KEY}
+SECRET_KEY=${SECRET_KEY}
+EOF
+
+          chmod 600 .env
+          echo ".env created successfully"
+          cat .env
+
+          echo "===== Deploy using docker compose ====="
+
+          docker compose down || true
+          docker compose pull || true
+          docker compose --env-file .env up -d
+
+          echo "Cleaning up .env file..."
+          rm -f .env
+          '''
+        }
       }
     }
   }
@@ -54,3 +83,4 @@ pipeline {
     failure { echo 'Pipeline failed — check logs' }
   }
 }
+
