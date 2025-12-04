@@ -1,176 +1,56 @@
-version: "3.8"
+pipeline {
+  agent any
 
-networks:
-  monitor_net:
-  default:
+  stages {
+    stage('Checkout') {
+      steps {
+        // clone your repo so docker-compose.yml is available in workspace
+        git url: 'https://github.com/srikrishna206/novya_update.git', branch: 'main'
+      }
+    }
 
-volumes:
-  pgdata:
-  prometheus_data:
-  grafana_data:
+    stage('Build images') {
+      steps {
+        sh '''
+        docker build -t srikrishna206/novya-backend:latest ./backend
+        docker build -t srikrishna206/novya-ai-backend:latest ./backend/ai_backend
+        docker build -t srikrishna206/novya-frontend:latest ./novya-frontend-main
+        '''
+      }
+    }
 
-services:
-  # -----------------------------------
-  # POSTGRES DATABASE
-  # -----------------------------------
-  db:
-    image: postgres:14
-    container_name: db
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 12345
-      POSTGRES_DB: novya
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - default
-      - monitor_net
-    restart: unless-stopped
+    stage('Push images') {
+      steps {
+        // replace 'docker-registry-creds' with your Jenkins credentials id
+        withCredentials([usernamePassword(credentialsId: 'docker-registry-creds', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
+          sh '''
+          echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin
+          docker push srikrishna206/novya-backend:latest
+          docker push srikrishna206/novya-ai-backend:latest
+          docker push srikrishna206/novya-frontend:latest
+          '''
+        }
+      }
+    }
 
-  # -----------------------------------
-  # REDIS
-  # -----------------------------------
-  redis:
-    image: redis:6
-    container_name: novya-redis
-    ports:
-      - "6379:6379"
-    networks:
-      - default
-    restart: unless-stopped
+    stage('Deploy (docker compose on Jenkins)') {
+      steps {
+        sh '''
+        # Ensure we are in workspace where docker-compose.yml exists
+        pwd
+        ls -la
 
-  # -----------------------------------
-  # NOVYA BACKEND (Django)
-  # -----------------------------------
-  novya-backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: novya-backend
-    depends_on:
-      - db
-      - redis
-    environment:
-      POSTGRES_DB: novya
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 12345
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-      SALT: 10
-      SECRET_KEY: ${SECRET_KEY:-hardcoded_secret_key_change_me}
-    ports:
-      - "8000:8000"
-    networks:
-      - default
-      - monitor_net
-    restart: unless-stopped
+        # Bring down old containers, pull latest images, and start upgraded stack
+        docker compose down || true
+        docker compose pull || true
+        docker compose --env-file .env up -d
+        '''
+      }
+    }
+  }
 
-  # -----------------------------------
-  # NOVYA AI BACKEND
-  # -----------------------------------
-  novya-ai-backend:
-    build:
-      context: ./backend/ai_backend
-      dockerfile: Dockerfile
-    container_name: novya-ai-backend
-    ports:
-      - "8001:8001"
-    environment:
-      AI_API_KEY: ${AI_API_KEY}
-    networks:
-      - default
-    restart: unless-stopped
-
-  # -----------------------------------
-  # FRONTEND
-  # -----------------------------------
-  novya-frontend:
-    build:
-      context: ./novya-frontend-main
-      dockerfile: Dockerfile
-    container_name: novya-frontend
-    ports:
-      - "80:80"
-    networks:
-      - default
-    restart: unless-stopped
-
-  # ===================================
-  # ===== MONITORING SECTION ==========
-  # ===================================
-
-  # -----------------------------------
-  # PostgreSQL Exporter
-  # -----------------------------------
-  postgres-exporter:
-    image: prometheuscommunity/postgres-exporter
-    container_name: postgres-exporter
-    environment:
-      DATA_SOURCE_NAME: "postgresql://postgres:12345@db:5432/novya?sslmode=disable"
-    networks:
-      - monitor_net
-    restart: unless-stopped
-
-  # -----------------------------------
-  # Node Exporter (Host metrics)
-  # -----------------------------------
-  node-exporter:
-    image: prom/node-exporter
-    container_name: node-exporter
-    pid: "host"
-    ports:
-      - "9100:9100"
-    networks:
-      - monitor_net
-    restart: unless-stopped
-
-  # -----------------------------------
-  # cAdvisor (Docker metrics)
-  # -----------------------------------
-  cadvisor:
-    image: gcr.io/google-containers/cadvisor:latest
-    container_name: cadvisor
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-    ports:
-      - "8080:8080"
-    networks:
-      - monitor_net
-    restart: unless-stopped
-
-  # -----------------------------------
-  # Prometheus
-  # -----------------------------------
-  prometheus:
-    image: prom/prometheus
-    container_name: prometheus
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
-    networks:
-      - monitor_net
-    restart: unless-stopped
-
-  # -----------------------------------
-  # Grafana
-  # -----------------------------------
-  grafana:
-    image: grafana/grafana
-    container_name: grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    depends_on:
-      - prometheus
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    networks:
-      - monitor_net
-    restart: unless-stopped
+  post {
+    success { echo 'Deployment finished successfully' }
+    failure { echo 'Pipeline failed — check logs' }
+  }
+}
