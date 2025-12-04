@@ -8,6 +8,21 @@ pipeline {
         git url: 'https://github.com/srikrishna206/novya_update.git', branch: 'main'
       }
     }
+    stage("Sonarqube Analysis "){
+            steps{
+                withSonarQubeEnv('SonarQube') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=novya \
+                    -Dsonar.projectKey=novya '''
+                }
+            }
+        }
+        stage("quality gate"){
+           steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token' 
+                }
+            } 
+        }
 
     stage('cleanup of images and containers'){
     steps{
