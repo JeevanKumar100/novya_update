@@ -49,13 +49,13 @@ services:
       # SECRET_KEY is read from the environment (.env) at runtime if provided.
       # If you don't provide SECRET_KEY in .env, set a default here (not recommended for prod).
       SECRET_KEY: ${SECRET_KEY:-hardcoded_secret_key_change_me}
-      command:
+    command: >
       sh -c "
-      python manage.py migrate --noinput &&
-      python manage.py runserver 0.0.0.0:8000
-      " 
+        python manage.py migrate --noinput &&
+        python manage.py runserver 0.0.0.0:8000
+      "
     ports:
-      - "8000:8000"
+        - "8000:8000"
     restart: unless-stopped
 
   novya-ai-backend:
