@@ -9,6 +9,23 @@ pipeline {
       }
     }
 
+    stage('cleanup of images and containers'){
+    steps{
+          sh '''
+                docker stop $(docker ps -aq)
+docker rm $(docker ps -aq)
+
+
+docker rmi -f $(docker images -aq)
+
+
+docker volume rm $(docker volume ls -q)
+
+docker system prune -a --volumes
+'''
+    }
+  }
+
     stage('Build images') {
       steps {
         // Pass AI key only to AI backend build (optional)
