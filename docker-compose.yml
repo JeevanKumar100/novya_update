@@ -1,6 +1,6 @@
 # docker-compose.yml
-# Services use prebuilt images from Docker Hub.
-# The deploy script replaces ${DOCKERHUB_OWNER:-your-dockerhub-username} with your username.
+# Uses images from Docker Hub. The placeholder ${DOCKERHUB_OWNER:-your-dockerhub-username}
+# will be replaced on the EC2 host in the deploy script.
 
 x-db-credentials: &db_env
   POSTGRES_DB: novya
@@ -27,7 +27,7 @@ services:
       retries: 8
 
   backend:
-    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:latest"
+    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:latest"
     depends_on:
       - postgres
     env_file:
@@ -52,7 +52,7 @@ services:
     entrypoint: ["/app/entrypoint.sh"]
 
   ai_backend:
-    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-ai-backend:latest"
+    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-ai-backend:latest"
     depends_on:
       - postgres
       - backend
@@ -72,7 +72,7 @@ services:
       retries: 5
 
   frontend:
-    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:latest"
+    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:latest"
     depends_on:
       - backend
     ports:
@@ -80,18 +80,6 @@ services:
     restart: always
     networks:
       - novya_net
-
-  backend_test:
-    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:latest"
-    env_file:
-      - .env
-    depends_on:
-      - postgres
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["python manage.py test --verbosity=2 --noinput"]
-    networks:
-      - novya_net
-    restart: "no"
 
 volumes:
   pgdata:
