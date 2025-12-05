@@ -101,13 +101,14 @@ jobs:
             set -e
             cd "${{ secrets.EC2_DEPLOY_DIR }}"
 
-            # Ensure docker and docker compose are available
+            # Ensure docker is available
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
               sudo usermod -aG docker $USER || true
             fi
 
+            # Ensure docker compose plugin exists
             if ! docker compose version >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker-compose-plugin
@@ -126,7 +127,7 @@ POSTGRES_PORT=5432
 EOF
             fi
 
-            # Build and start (detached)
+            # Build and start services (detached)
             docker compose pull || true
             docker compose up --build -d
 
