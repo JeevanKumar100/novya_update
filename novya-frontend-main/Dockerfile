@@ -1,33 +1,35 @@
 # novya-frontend-main/Dockerfile
 # Multi-stage build: build React app, then serve with nginx
 
+# Build stage
 FROM node:18 AS builder
-
-# Optional: set an npm version when building if your lockfile needs it.
-# Build with: docker build --build-arg NPM_VERSION=11.6.4 ...
-ARG NPM_VERSION=""
-
+ARG NPM_VERSION
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Copy package files first for caching
+# Copy package files first for layer caching
 COPY package*.json ./
 
-# Optionally upgrade npm if lockfile requires newer npm
-RUN if [ -n "$NPM_VERSION" ]; then npm install -g "npm@$NPM_VERSION"; fi
+# Only try to upgrade npm if NPM_VERSION is a non-empty, sane value.
+# This handles cases where build-arg is not provided or accidentally set to literal "".
+RUN set -eux; \
+    case "$NPM_VERSION" in \
+      ''|\"\" ) echo "No NPM_VERSION provided — skipping npm upgrade"; ;; \
+      * ) echo "Installing npm@$NPM_VERSION"; npm install -g "npm@$NPM_VERSION"; ;; \
+    esac
 
-# Create a lightweight .npmrc to reduce permission & network issues
+# Minimal .npmrc to reduce permission/network problems
 RUN printf "unsafe-perm=true\nfetch-retries=5\nfetch-retry-factor=2\nstrict-ssl=true\n" > .npmrc
 
-# Install dependencies deterministically; fallback to legacy-peer-deps on failure
+# Install dependencies deterministically; fallback to legacy-peer-deps on first failure
 RUN npm ci --prefer-offline --no-audit --progress=false || \
     { echo "npm ci failed — retrying with legacy-peer-deps"; npm ci --legacy-peer-deps --prefer-offline --no-audit --progress=false; }
 
-# Copy the rest of app and build
+# Copy source and build
 COPY . .
 RUN npm run build
 
-# Runner: nginx serving the build output
+# Production runner
 FROM nginx:stable-alpine AS runner
 COPY --from=builder /app/build /usr/share/nginx/html
 
