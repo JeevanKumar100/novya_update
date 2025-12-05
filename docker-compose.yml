@@ -1,5 +1,7 @@
 # docker-compose.yml
-# Compose references Docker Hub images (owner placeholder can be replaced during deploy).
+# Services use prebuilt images from Docker Hub.
+# The deploy script replaces ${DOCKERHUB_OWNER:-your-dockerhub-username} with your username.
+
 x-db-credentials: &db_env
   POSTGRES_DB: novya
   POSTGRES_USER: postgres
@@ -25,8 +27,7 @@ services:
       retries: 8
 
   backend:
-    # images are published to Docker Hub as: <DOCKERHUB_USERNAME>/novya-backend:latest
-    image: "${DOCKERHUB_USERNAME:-yourname}/novya-backend:latest"
+    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:latest"
     depends_on:
       - postgres
     env_file:
@@ -51,7 +52,7 @@ services:
     entrypoint: ["/app/entrypoint.sh"]
 
   ai_backend:
-    image: "${DOCKERHUB_USERNAME:-yourname}/novya-ai-backend:latest"
+    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-ai-backend:latest"
     depends_on:
       - postgres
       - backend
@@ -71,7 +72,7 @@ services:
       retries: 5
 
   frontend:
-    image: "${DOCKERHUB_USERNAME:-yourname}/novya-frontend:latest"
+    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:latest"
     depends_on:
       - backend
     ports:
@@ -81,7 +82,7 @@ services:
       - novya_net
 
   backend_test:
-    image: "${DOCKERHUB_USERNAME:-yourname}/novya-backend:latest"
+    image: "docker.io/${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:latest"
     env_file:
       - .env
     depends_on:
