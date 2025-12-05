@@ -15,7 +15,7 @@ env:
 
 jobs:
   build-and-push:
-    name: Build & Push images (Docker Hub)
+    name: Build & Push images
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.set-tag.outputs.tag }}
@@ -26,8 +26,9 @@ jobs:
       - name: Set IMAGE_TAG (use commit SHA short)
         id: set-tag
         run: |
-          # create a short tag from the commit SHA
-          echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          # create a short 8-char tag from full sha
+          TAG=$(echo "${GITHUB_SHA}" | cut -c1-8)
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU (for multi-arch)
         uses: docker/setup-qemu-action@v3
@@ -38,10 +39,11 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
+          registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build & push frontend (Docker Hub)
+      - name: Build & push frontend
         uses: docker/build-push-action@v4
         with:
           context: ./novya-frontend-main
@@ -51,7 +53,7 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/novya-frontend:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/novya-frontend:${{ steps.set-tag.outputs.tag }}
 
-      - name: Build & push backend (Docker Hub)
+      - name: Build & push backend
         uses: docker/build-push-action@v4
         with:
           context: ./backend
@@ -61,7 +63,7 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/novya-backend:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/novya-backend:${{ steps.set-tag.outputs.tag }}
 
-      - name: Build & push ai_backend (Docker Hub)
+      - name: Build & push ai_backend
         uses: docker/build-push-action@v4
         with:
           context: ./backend/ai_backend
@@ -141,7 +143,7 @@ jobs:
             DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
             cd "$DEPLOY_DIR"
 
-            # avoid "detected dubious ownership" error when repo is owned by different user
+            # fix dubious ownership error
             git config --global --add safe.directory "$DEPLOY_DIR"
 
             # fetch latest repo & check branch
@@ -149,35 +151,35 @@ jobs:
             git checkout "${{ secrets.BRANCH || env.DEPLOY_BRANCH }}" || true
             git pull origin "${{ secrets.BRANCH || env.DEPLOY_BRANCH }}" || true
 
-            # ensure docker exists (install if missing)
+            # install docker if missing
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
               sudo usermod -aG docker $USER || true
             fi
 
-            # ensure docker compose plugin exists
+            # install docker compose plugin if missing
             if ! docker compose version >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker-compose-plugin
             fi
 
-            # Login to Docker Hub on EC2 so it can pull the images
-            # NOTE: set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN as repo secrets
+            # Login to Docker Hub on EC2 so docker compose pull can fetch private images
+            # NOTE: secrets are injected before sending script to remote host
             echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-            # Replace placeholder owner in compose with Docker Hub username (if used)
-            OWNER="${{ secrets.DOCKERHUB_USERNAME }}"
-            sed -i "s|\${DOCKERHUB_USERNAME:-yourname}|${OWNER}|g" docker-compose.yml || true
+            # Replace placeholder owner in compose file with actual Docker Hub username
+            DOCKERHUB_OWNER="${{ secrets.DOCKERHUB_USERNAME }}"
+            sed -i "s|\${DOCKERHUB_OWNER:-your-dockerhub-username}|${DOCKERHUB_OWNER}|g" docker-compose.yml || true
 
-            # Pull images from Docker Hub and bring containers up
+            # Pull images from Docker Hub and bring up
             docker compose pull
             docker compose up --remove-orphans -d
 
-            # Run migrations and collectstatic (idempotent)
+            # Run migrations and collectstatic
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
-            # show status and images on EC2
+            # Show status and the images (so you can confirm on Actions logs)
             docker compose ps
             docker images | sed -n '1,200p'
