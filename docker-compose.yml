@@ -1,7 +1,4 @@
 # docker-compose.yml
-# Uses images from Docker Hub. The placeholder ${DOCKERHUB_OWNER:-your-dockerhub-username}
-# will be replaced on the EC2 host in the deploy script.
-
 x-db-credentials: &db_env
   POSTGRES_DB: novya
   POSTGRES_USER: postgres
