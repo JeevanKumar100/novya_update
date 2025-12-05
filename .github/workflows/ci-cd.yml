@@ -52,8 +52,6 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/novya-frontend:latest
             ghcr.io/${{ github.repository_owner }}/novya-frontend:${{ github.sha::8 }}
-          build-args: |
-            NPM_VERSION=
 
       - name: Build & push backend
         uses: docker/build-push-action@v4
@@ -144,6 +142,9 @@ jobs:
             set -e
             DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
             cd "$DEPLOY_DIR"
+
+            # mark deploy dir safe to avoid "detected dubious ownership" error
+            git config --global --add safe.directory "$DEPLOY_DIR"
 
             # fetch latest repo & check branch
             git fetch --all --prune
