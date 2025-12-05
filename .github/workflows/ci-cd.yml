@@ -6,33 +6,79 @@ on:
       - main
   workflow_dispatch:
 
+# allow pushing to GHCR using GITHUB_TOKEN
+permissions:
+  contents: read
+  packages: write
+
 env:
   # default branch deployed (override with secret BRANCH if you want)
   DEPLOY_BRANCH: main
 
 jobs:
-  build:
-    name: Build (validate Docker images)
+  build-and-push:
+    name: Build & Push images
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set IMAGE_TAG (use commit SHA)
+        id: set-tag
+        run: |
+          echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU (for multi-arch)
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build images via docker compose (validate)
-        run: |
-          # Use docker compose to validate builds for each service
-          docker compose -f docker-compose.yml build --progress=plain
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./novya-frontend-main
+          file: ./novya-frontend-main/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/novya-frontend:latest
+            ghcr.io/${{ github.repository_owner }}/novya-frontend:${{ github.sha::8 }}
+          build-args: |
+            NPM_VERSION=
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/novya-backend:latest
+            ghcr.io/${{ github.repository_owner }}/novya-backend:${{ github.sha::8 }}
+
+      - name: Build & push ai_backend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend/ai_backend
+          file: ./backend/ai_backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/novya-ai-backend:latest
+            ghcr.io/${{ github.repository_owner }}/novya-ai-backend:${{ github.sha::8 }}
 
   test:
     name: Test (backend)
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-and-push
     services:
       postgres:
         image: postgres:15
@@ -47,6 +93,7 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -95,14 +142,15 @@ jobs:
           port: ${{ secrets.EC2_SSH_PORT || 22 }}
           script: |
             set -e
-            # move to deploy directory
-            cd "${{ secrets.EC2_DEPLOY_DIR }}"
-            # ensure we are on the correct branch and up-to-date
+            DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
+            cd "$DEPLOY_DIR"
+
+            # fetch latest repo & check branch
             git fetch --all --prune
             git checkout "${{ secrets.BRANCH || env.DEPLOY_BRANCH }}" || true
             git pull origin "${{ secrets.BRANCH || env.DEPLOY_BRANCH }}" || true
 
-            # make sure docker exists (install if missing)
+            # ensure docker exists (install if missing)
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
@@ -115,13 +163,19 @@ jobs:
               sudo apt-get install -y docker-compose-plugin
             fi
 
-            # Build and run containers
-            docker compose pull || true
-            docker compose up --build -d
+            # Replace placeholder owner in compose with actual owner (only if needed)
+            # (This substitutes ${GITHUB_OWNER:-your-org} in docker-compose.yml)
+            OWNER="${{ github.repository_owner }}"
+            sed -i "s|\${GITHUB_OWNER:-your-org}|${OWNER}|g" docker-compose.yml || true
+
+            # Pull images published to GHCR and bring up
+            docker compose pull
+            docker compose up --remove-orphans -d
 
             # Run migrations and collectstatic (idempotent)
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
-            # show status
+            # show status and images
             docker compose ps
+            docker images | sed -n '1,200p'
