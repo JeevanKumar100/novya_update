@@ -1,32 +1,33 @@
 # novya-frontend-main/Dockerfile
+# Multi-stage build for a Create-React-App / react-scripts project.
+
+# ---- build stage ----
 FROM node:18 AS builder
-
-# declare build arg with default empty so it's defined during build even if not passed
 ARG NPM_VERSION=""
-
-ENV NODE_ENV=production
 WORKDIR /app
 
-# copy package manifest for caching
+# If you need to enforce a specific npm, pass NPM_VERSION as a build-arg.
+RUN if [ -n "$NPM_VERSION" ]; then npm install -g "npm@$NPM_VERSION"; fi
+
+# Copy package manifest first to leverage Docker layer cache
 COPY package*.json ./
 
-# safe conditional npm upgrade: NPM_VERSION is defined (maybe empty)
-RUN set -eux; \
-    case "$NPM_VERSION" in \
-      "" ) echo "No NPM_VERSION provided — skipping npm upgrade" ;; \
-      * ) echo "Installing npm@$NPM_VERSION" ; npm install -g "npm@$NPM_VERSION" ;; \
-    esac
-
-# small .npmrc to reduce network/permission issues
+# Ensure npm installs devDependencies so tools like react-scripts are available.
+# Do NOT set NODE_ENV=production before installing.
+# Create a small .npmrc to reduce permission/network friction
 RUN printf "unsafe-perm=true\nfetch-retries=5\nfetch-retry-factor=2\nstrict-ssl=true\n" > .npmrc
 
-# install deps (prefer stable reproducible install)
+# Use npm ci for reproducible installs (will install devDependencies because NODE_ENV not set)
 RUN npm ci --prefer-offline --no-audit --progress=false || \
     { echo "npm ci failed - retrying with legacy-peer-deps"; npm ci --legacy-peer-deps --prefer-offline --no-audit --progress=false; }
 
+# Copy app sources and run the build
 COPY . .
+# Now set production NODE_ENV for the build command (some libs read it)
+ENV NODE_ENV=production
 RUN npm run build
 
+# ---- runtime stage ----
 FROM nginx:stable-alpine AS runner
 COPY --from=builder /app/build /usr/share/nginx/html
 EXPOSE 80
