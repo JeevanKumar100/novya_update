@@ -29,7 +29,7 @@ jobs:
           TAG=$(echo "${GITHUB_SHA}" | cut -c1-8)
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU (optional)
+      - name: Set up QEMU (for multi-arch)
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -119,7 +119,7 @@ jobs:
           python manage.py test --verbosity=2 --noinput
 
   deploy:
-    name: Deploy to EC2 (pull images from Docker Hub)
+    name: Deploy to EC2
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
@@ -140,24 +140,26 @@ jobs:
           script: |
             set -euo pipefail
 
+            # injected secrets (shell-side variables)
             DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
             DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
             DOCKERHUB_TOKEN="${{ secrets.DOCKERHUB_TOKEN }}"
+            EC2_REPO_URL="${{ secrets.EC2_REPO_URL }}"
             BRANCH="${{ secrets.BRANCH || env.DEPLOY_BRANCH }}"
-            EC2_REPO_URL="${{ secrets.EC2_REPO_URL:- }}"
 
             if [ -z "$DEPLOY_DIR" ]; then
-              echo "EC2_DEPLOY_DIR secret is required"
+              echo "EC2_DEPLOY_DIR secret is empty — aborting."
               exit 1
             fi
 
+            # create directory and ensure ownership so git doesn't complain
             sudo mkdir -p "$DEPLOY_DIR"
             CURUSER="$(id -un)"
             CURUID="$(id -u)"
             CURGID="$(id -g)"
             sudo chown -R "${CURUID}:${CURGID}" "$DEPLOY_DIR" || true
 
-            # clone if missing
+            # clone if not present
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
               if [ -n "$EC2_REPO_URL" ]; then
                 rm -rf "${DEPLOY_DIR:?}"/*
@@ -170,22 +172,17 @@ jobs:
 
             cd "$DEPLOY_DIR"
 
-            # fix dubious ownership
+            # avoid 'dubious ownership' git error
             git config --global --add safe.directory "$DEPLOY_DIR" || true
 
-            # fetch and sync to remote branch (clean local uncommitted changes)
+            # update branch
             git fetch --all --prune || true
-            if [ -n "$(git status --porcelain)" ]; then
-              echo "Backing up docker-compose.yml then resetting local changes."
-              [ -f docker-compose.yml ] && cp docker-compose.yml docker-compose.yml.local_backup || true
-              git reset --hard || true
-              git clean -fd || true
-            fi
             git checkout "$BRANCH" || true
-            git reset --hard "origin/$BRANCH" || true
-            git clean -fd || true
+            # if there are local edits to docker-compose.yml we don't want to fail.
+            git reset --hard origin/"$BRANCH" || true
+            git pull origin "$BRANCH" || true
 
-            # ensure docker & compose present
+            # ensure docker & compose
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
@@ -196,31 +193,22 @@ jobs:
               sudo apt-get install -y docker-compose-plugin
             fi
 
-            # Docker Hub login on EC2 (required for private repos)
+            # login to Docker Hub if credentials provided
             if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
               echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             else
-              echo "No Docker Hub credentials provided; attempting to pull public images only."
+              echo "No Docker Hub credentials provided; will attempt to pull public images only."
             fi
 
-            # Replace placeholder owner in docker-compose.yml with actual Docker Hub username
+            # Replace placeholder owner in compose with actual Docker Hub username (safe)
             DOCKERHUB_OWNER="${DOCKERHUB_USERNAME:-your-dockerhub-username}"
             sed -i "s|\${DOCKERHUB_OWNER:-your-dockerhub-username}|${DOCKERHUB_OWNER}|g" docker-compose.yml || true
 
-            # Ensure .env exists (writes from .env.example if missing)
-            if [ ! -f .env ]; then
-              if [ -f .env.example ]; then
-                cp .env.example .env
-              else
-                echo ".env not found and no .env.example; continuing but compose may fail."
-              fi
-            fi
-
-            # Pull images from Docker Hub & run containers
+            # Pull images from Docker Hub and bring up
             docker compose pull || true
             docker compose up --remove-orphans -d
 
-            # Migrate & collectstatic
+            # Run migrations and collectstatic
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
