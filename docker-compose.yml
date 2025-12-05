@@ -1,4 +1,5 @@
-version: "3.8"
+# docker-compose.yml
+# NOTE: modern docker compose ignores the top-level 'version' field — removed to avoid warnings.
 
 x-db-credentials: &db_env
   POSTGRES_DB: novya
@@ -83,9 +84,10 @@ services:
     build:
       context: ./novya-frontend-main
       dockerfile: Dockerfile
-      args:
-        # optionally set NPM_VERSION if needed
-        NPM_VERSION: ${NPM_VERSION:-""}
+      # DO NOT pass an empty build-arg. If you need to set a specific npm version,
+      # use an explicit value like:
+      # args:
+      #   NPM_VERSION: "11.6.4"
     depends_on:
       - backend
     ports:
