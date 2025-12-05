@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - main
-  workfname: CI / Build / Test / Deploy
-
-on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -29,7 +23,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set IMAGE_TAG (use commit SHA short)
+      - name: Set IMAGE_TAG (use short SHA)
         id: set-tag
         run: |
           TAG=$(echo "${GITHUB_SHA}" | cut -c1-8)
@@ -146,48 +140,51 @@ jobs:
           script: |
             set -euo pipefail
 
-            # Injected secrets (safe expansion)
+            # variables from secrets (injected by Actions)
             DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
             DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
             DOCKERHUB_TOKEN="${{ secrets.DOCKERHUB_TOKEN }}"
             EC2_REPO_URL="${{ secrets.EC2_REPO_URL }}"
 
             if [ -z "$DEPLOY_DIR" ]; then
-              echo "ERROR: EC2_DEPLOY_DIR secret is empty. Aborting."
+              echo "EC2_DEPLOY_DIR secret is empty — aborting."
               exit 1
             fi
 
-            # Ensure deploy directory exists and is owned by the current user (best-effort)
+            # Prepare directory and ownership (best-effort)
             sudo mkdir -p "$DEPLOY_DIR"
             CURUSER="$(id -un)"
             CURUID="$(id -u)"
             CURGID="$(id -g)"
             sudo chown -R "${CURUID}:${CURGID}" "$DEPLOY_DIR" || true
 
-            # if the repo isn't present, clone if EC2_REPO_URL provided
+            # If repo not present, clone (optional)
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
               if [ -n "$EC2_REPO_URL" ]; then
-                echo "Cloning repo into $DEPLOY_DIR"
-                rm -rf "$DEPLOY_DIR"/*
+                rm -rf "${DEPLOY_DIR:?}"/*
                 git clone "$EC2_REPO_URL" "$DEPLOY_DIR"
               else
-                echo "No repo found at $DEPLOY_DIR and EC2_REPO_URL not provided. Aborting."
+                echo "No repo at $DEPLOY_DIR and EC2_REPO_URL not provided. Aborting."
                 exit 1
               fi
             fi
 
             cd "$DEPLOY_DIR"
 
-            # fix dubious ownership error for this working directory
+            # Avoid 'dubious ownership' git error
             git config --global --add safe.directory "$DEPLOY_DIR" || true
 
-            # fetch & checkout branch
-            BRANCH="${{ secrets.BRANCH || env.DEPLOY_BRANCH }}"
+            # Branch selection: use secret BRANCH if provided, otherwise workflow env DEPLOY_BRANCH
+            BRANCH="${{ secrets.BRANCH }}"
+            if [ -z "$BRANCH" ]; then
+              BRANCH="${DEPLOY_BRANCH}"
+            fi
+
             git fetch --all --prune || true
             git checkout "$BRANCH" || true
             git pull origin "$BRANCH" || true
 
-            # Ensure docker & compose plugin are present
+            # Ensure docker & compose plugin
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
@@ -198,250 +195,25 @@ jobs:
               sudo apt-get install -y docker-compose-plugin
             fi
 
-            # Docker Hub login if credentials were provided
+            # Login to Docker Hub (if credentials provided)
             if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
               echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             else
-              echo "No Docker Hub credentials provided; attempting to pull public images only."
+              echo "No Docker Hub credentials provided; will attempt to pull public images only."
             fi
 
-            # Replace placeholder owner in compose with the Docker Hub username (safe)
+            # Replace placeholder in compose file with Docker Hub username (safe)
             DOCKERHUB_OWNER="${DOCKERHUB_USERNAME:-your-dockerhub-username}"
             sed -i "s|\${DOCKERHUB_OWNER:-your-dockerhub-username}|${DOCKERHUB_OWNER}|g" docker-compose.yml || true
 
-            # Pull images from Docker Hub and start containers
+            # Pull & up
             docker compose pull || true
             docker compose up --remove-orphans -d
 
-            # Run migrations + collectstatic (idempotent)
+            # Run migrations and collectstatic (idempotent)
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
-            # show status and the images on EC2 host
+            # Show status + images (visible in Actions logs)
             docker compose ps || true
             docker images | sed -n '1,200p' || true
-d & Push images
-    runs-on: ubuntu-latest
-    outputs:
-      image_tag: ${{ steps.set-tag.outputs.tag }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set IMAGE_TAG (use commit SHA short)
-        id: set-tag
-        run: |
-          # create a short 8-char tag from full sha
-          TAG=$(echo "${GITHUB_SHA}" | cut -c1-8)
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU (for multi-arch)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build & push frontend
-        uses: docker/build-push-action@v4
-        with:
-          context: ./novya-frontend-main
-          file: ./novya-frontend-main/Dockerfile
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/novya-frontend:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/novya-frontend:${{ steps.set-tag.outputs.tag }}
-
-      - name: Build & push backend
-        uses: docker/build-push-action@v4
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/novya-backend:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/novya-backend:${{ steps.set-tag.outputs.tag }}
-
-      - name: Build & push ai_backend
-        uses: docker/build-push-action@v4
-        with:
-          context: ./backend/ai_backend
-          file: ./backend/ai_backend/Dockerfile
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/novya-ai-backend:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/novya-ai-backend:${{ steps.set-tag.outputs.tag }}
-
-  test:
-    name: Test (backend)
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_DB: novya
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: 12345
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Wait for Postgres to be ready
-        run: |
-          for i in {1..30}; do
-            pg_isready -h 127.0.0.1 -p 5433 -U postgres && break || sleep 2
-          done
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-
-      - name: Install backend test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
-
-      - name: Run Django tests
-        env:
-          DATABASE_URL: postgresql://postgres:12345@127.0.0.1:5433/novya
-        run: |
-          cd backend
-          python manage.py test --verbosity=2 --noinput
-
-  deploy:
-    name: Deploy to EC2
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Ensure ssh client is available
-        run: sudo apt-get update && sudo apt-get install -y openssh-client git
-
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v0.1.8
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_SSH_PORT || 22 }}
-          script: |
-            # Robust deploy script — fixes ownership issues, marks safe.directory,
-            # pulls images from Docker Hub, runs containers, runs migrations, prints images.
-            set -euo pipefail
-
-            # make sure this secret is set and non-empty
-            DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
-            if [ -z "$DEPLOY_DIR" ]; then
-              echo "ERROR: EC2_DEPLOY_DIR secret is empty. Aborting."
-              exit 1
-            fi
-
-            echo "Deploy dir: $DEPLOY_DIR"
-            sudo mkdir -p "$DEPLOY_DIR" || true
-
-            # Best-effort: ensure current SSH user has ownership over deploy dir to avoid permission errors.
-            CURUSER="$(id -un)"
-            CURUID="$(id -u)"
-            CURGID="$(id -g)"
-            echo "Running as user: ${CURUSER} (uid:${CURUID} gid:${CURGID})"
-            echo "Attempting sudo chown of $DEPLOY_DIR to current user (best-effort)"
-            sudo chown -R "${CURUID}:${CURGID}" "$DEPLOY_DIR" 2>/dev/null || true
-
-            # Fix .git permissions to avoid "Permission denied" on FETCH_HEAD etc.
-            if [ -d "$DEPLOY_DIR/.git" ]; then
-              echo "Fixing .git permissions"
-              sudo chmod -R u+rwX "$DEPLOY_DIR/.git" 2>/dev/null || true
-              sudo chown -R "${CURUID}:${CURGID}" "$DEPLOY_DIR/.git" 2>/dev/null || true
-            fi
-
-            # Mark ONLY the deploy dir safe to avoid 'dubious ownership' error
-            git config --global --add safe.directory "$DEPLOY_DIR" || true
-
-            # Diagnostics for logs
-            echo "---- deploy dir listing ----"
-            ls -ld "$DEPLOY_DIR" || true
-            ls -la "$DEPLOY_DIR" | sed -n '1,200p' || true
-            echo "Git safe.directory entries:"
-            git config --global --get-all safe.directory || true
-
-            # cd into repo; if no .git present attempt to clone (optional)
-            cd "$DEPLOY_DIR"
-            if [ ! -d ".git" ]; then
-              echo "No .git found at $DEPLOY_DIR"
-              if [ -n "${{ secrets.EC2_REPO_URL:- }}" ]; then
-                echo "Cloning repo from EC2_REPO_URL into $DEPLOY_DIR"
-                git clone "${{ secrets.EC2_REPO_URL }}" . || { echo "git clone failed"; exit 1; }
-              else
-                echo "EC2_REPO_URL not set; cannot clone. Aborting."
-                exit 1
-              fi
-            fi
-
-            # Fetch & checkout branch safely
-            BRANCH="${{ secrets.BRANCH || env.DEPLOY_BRANCH }}"
-            echo "Fetching latest and checking out branch: $BRANCH"
-            git fetch --all --prune || true
-            git checkout "$BRANCH" || true
-            git pull origin "$BRANCH" || true
-
-            # Ensure docker & compose plugin installed on EC2 (install if missing)
-            if ! command -v docker >/dev/null 2>&1; then
-              echo "Installing docker..."
-              sudo apt-get update
-              sudo apt-get install -y docker.io
-              sudo usermod -aG docker "$CURUSER" || true
-            fi
-
-            if ! docker compose version >/dev/null 2>&1; then
-              echo "Installing docker-compose-plugin..."
-              sudo apt-get update
-              sudo apt-get install -y docker-compose-plugin
-            fi
-
-            # Docker Hub login (so private images/pulls succeed)
-            if [ -n "${{ secrets.DOCKERHUB_USERNAME:- }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN:- }}" ]; then
-              echo "Logging in to Docker Hub..."
-              echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-            else
-              echo "Warning: DOCKERHUB_USERNAME or DOCKERHUB_TOKEN missing — attempting to pull public images only"
-            fi
-
-            # Replace placeholder owner in docker-compose.yml with actual Docker Hub username
-            DOCKERHUB_OWNER="${{ secrets.DOCKERHUB_USERNAME:-your-dockerhub-username }}"
-            sed -i "s|\${DOCKERHUB_OWNER:-your-dockerhub-username}|${DOCKERHUB_OWNER}|g" docker-compose.yml || true
-
-            # Pull images from Docker Hub and bring up containers
-            echo "Pulling images and bringing up containers..."
-            docker compose pull || true
-            docker compose up --remove-orphans -d
-
-            # Run migrations & collectstatic (idempotent)
-            docker compose run --rm backend python manage.py migrate --noinput || true
-            docker compose run --rm backend python manage.py collectstatic --noinput || true
-
-            # Show status and images so Actions logs show images present on EC2
-            echo "Docker compose status:"
-            docker compose ps || true
-            echo "Docker images on EC2 (top 200 lines):"
-            docker images | sed -n '1,200p' || true
-
-            echo "Deployment complete."
