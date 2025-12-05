@@ -2,7 +2,8 @@ name: CI / Build / Test / Deploy
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -22,13 +23,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set IMAGE_TAG (short sha)
+      - name: Set IMAGE_TAG (short SHA)
         id: set-tag
         run: |
           TAG=$(echo "${GITHUB_SHA}" | cut -c1-8)
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU (multi-arch)
+      - name: Set up QEMU (optional)
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -82,7 +83,8 @@ jobs:
           POSTGRES_DB: novya
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: 12345
-        ports: [ "5433:5432" ]
+        ports:
+          - 5433:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s
@@ -117,7 +119,7 @@ jobs:
           python manage.py test --verbosity=2 --noinput
 
   deploy:
-    name: Deploy to EC2 (pull images from Docker Hub and run)
+    name: Deploy to EC2 (pull images from Docker Hub)
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
@@ -141,8 +143,8 @@ jobs:
             DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
             DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
             DOCKERHUB_TOKEN="${{ secrets.DOCKERHUB_TOKEN }}"
-            EC2_REPO_URL="${{ secrets.EC2_REPO_URL }}"
             BRANCH="${{ secrets.BRANCH || env.DEPLOY_BRANCH }}"
+            EC2_REPO_URL="${{ secrets.EC2_REPO_URL:- }}"
 
             if [ -z "$DEPLOY_DIR" ]; then
               echo "EC2_DEPLOY_DIR secret is required"
@@ -150,73 +152,78 @@ jobs:
             fi
 
             sudo mkdir -p "$DEPLOY_DIR"
-            # make the runner user own it (best-effort)
             CURUSER="$(id -un)"
             CURUID="$(id -u)"
             CURGID="$(id -g)"
             sudo chown -R "${CURUID}:${CURGID}" "$DEPLOY_DIR" || true
 
-            # clone repo on EC2 if not present
+            # clone if missing
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
               if [ -n "$EC2_REPO_URL" ]; then
                 rm -rf "${DEPLOY_DIR:?}"/*
                 git clone "$EC2_REPO_URL" "$DEPLOY_DIR"
               else
-                echo "EC2_REPO_URL not provided and no repo present in $DEPLOY_DIR"
+                echo "No repo at $DEPLOY_DIR and EC2_REPO_URL not provided. Aborting."
                 exit 1
               fi
             fi
 
             cd "$DEPLOY_DIR"
 
-            # avoid 'dubious ownership' errors
+            # fix dubious ownership
             git config --global --add safe.directory "$DEPLOY_DIR" || true
 
+            # fetch and sync to remote branch (clean local uncommitted changes)
             git fetch --all --prune || true
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "Backing up docker-compose.yml then resetting local changes."
+              [ -f docker-compose.yml ] && cp docker-compose.yml docker-compose.yml.local_backup || true
+              git reset --hard || true
+              git clean -fd || true
+            fi
             git checkout "$BRANCH" || true
-            git pull origin "$BRANCH" || true
+            git reset --hard "origin/$BRANCH" || true
+            git clean -fd || true
 
-            # ensure docker exists
+            # ensure docker & compose present
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
               sudo usermod -aG docker "$CURUSER" || true
             fi
-
-            # ensure docker compose plugin exists
             if ! docker compose version >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker-compose-plugin
             fi
 
-            # login to Docker Hub on EC2 so private images can be pulled
+            # Docker Hub login on EC2 (required for private repos)
             if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
               echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             else
-              echo "No Docker Hub credentials provided; pulling public images only"
+              echo "No Docker Hub credentials provided; attempting to pull public images only."
             fi
 
-            # Replace placeholder owner in compose with Docker Hub username
+            # Replace placeholder owner in docker-compose.yml with actual Docker Hub username
             DOCKERHUB_OWNER="${DOCKERHUB_USERNAME:-your-dockerhub-username}"
             sed -i "s|\${DOCKERHUB_OWNER:-your-dockerhub-username}|${DOCKERHUB_OWNER}|g" docker-compose.yml || true
 
-            # Optional: if .env missing and ENV_FILE_CONTENT secret exists, write it
-            if [ ! -f .env ] && [ -n "${{ secrets.ENV_FILE_CONTENT || '' }}" ]; then
-              echo "Writing .env from ENV_FILE_CONTENT secret"
-              cat > .env <<'EOF'
-${{ secrets.ENV_FILE_CONTENT }}
-EOF
-              chmod 600 .env || true
+            # Ensure .env exists (writes from .env.example if missing)
+            if [ ! -f .env ]; then
+              if [ -f .env.example ]; then
+                cp .env.example .env
+              else
+                echo ".env not found and no .env.example; continuing but compose may fail."
+              fi
             fi
 
-            # Pull images from Docker Hub and start containers
+            # Pull images from Docker Hub & run containers
             docker compose pull || true
             docker compose up --remove-orphans -d
 
-            # Run migrations and collectstatic (idempotent)
+            # Migrate & collectstatic
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
-            # show status and images on EC2 (visible in Actions logs)
+            # Show status and the images (visible in Actions logs)
             docker compose ps || true
             docker images | sed -n '1,200p' || true
