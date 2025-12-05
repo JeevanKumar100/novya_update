@@ -1,5 +1,8 @@
 # docker-compose.yml
-# NOTE: modern docker compose ignores the top-level 'version' field.
+# Use images published to GHCR. The placeholder ${GITHUB_OWNER:-your-org} will be replaced
+# during the deploy step on the EC2 host (so the same file can be used elsewhere).
+#
+# Volumes / networks / healthchecks are preserved from your prior file.
 
 x-db-credentials: &db_env
   POSTGRES_DB: novya
@@ -25,12 +28,12 @@ services:
       timeout: 5s
       retries: 8
 
+  # NOTE: these services reference pre-built images in GHCR.
+  # The deploy script will replace ${GITHUB_OWNER:-your-org} with your org/user.
   backend:
-    # Use image pulled from registry (built & pushed by CI).
-    image: ghcr.io/${GITHUB_OWNER:-your-org}/novya-backend:latest
+    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-backend:latest"
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     env_file:
       - .env
     environment:
@@ -53,12 +56,10 @@ services:
     entrypoint: ["/app/entrypoint.sh"]
 
   ai_backend:
-    image: ghcr.io/${GITHUB_OWNER:-your-org}/novya-ai-backend:latest
+    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-ai-backend:latest"
     depends_on:
-      postgres:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
+      - postgres
+      - backend
     env_file:
       - .env
     environment:
@@ -75,7 +76,7 @@ services:
       retries: 5
 
   frontend:
-    image: ghcr.io/${GITHUB_OWNER:-your-org}/novya-frontend:latest
+    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-frontend:latest"
     depends_on:
       - backend
     ports:
@@ -83,6 +84,18 @@ services:
     restart: always
     networks:
       - novya_net
+
+  backend_test:
+    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-backend:latest"
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["python manage.py test --verbosity=2 --noinput"]
+    networks:
+      - novya_net
+    restart: "no"
 
 volumes:
   pgdata:
