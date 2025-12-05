@@ -132,4 +132,4 @@ EOF
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
-            docker compose ps
+            docker compose ps 
