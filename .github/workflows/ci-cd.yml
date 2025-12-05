@@ -4,27 +4,33 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+env:
+  # default branch deployed (override with secret BRANCH if you want)
+  DEPLOY_BRANCH: main
 
 jobs:
   build:
-    name: Build images (validation)
+    name: Build (validate Docker images)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
+      - name: Set up QEMU (for multi-arch)
         uses: docker/setup-qemu-action@v2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build images via docker compose
+      - name: Build images via docker compose (validate)
         run: |
+          # Use docker compose to validate builds for each service
           docker compose -f docker-compose.yml build --progress=plain
 
   test:
-    name: Run backend tests
+    name: Test (backend)
     runs-on: ubuntu-latest
     needs: build
     services:
@@ -33,7 +39,7 @@ jobs:
         env:
           POSTGRES_DB: novya
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: "12345"
+          POSTGRES_PASSWORD: 12345
         ports:
           - 5433:5432
         options: >-
@@ -42,21 +48,21 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Wait for Postgres
+      - name: Wait for Postgres to be ready
         run: |
           for i in {1..30}; do
             pg_isready -h 127.0.0.1 -p 5433 -U postgres && break || sleep 2
           done
 
-      - name: Set up Python
+      - name: Setup Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
-      - name: Install backend dependencies
+      - name: Install backend test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
@@ -72,67 +78,50 @@ jobs:
     name: Deploy to EC2
     runs-on: ubuntu-latest
     needs: test
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install rsync
-        run: sudo apt-get update && sudo apt-get install -y rsync
+      - name: Ensure ssh client is available
+        run: sudo apt-get update && sudo apt-get install -y openssh-client git
 
-      - name: Copy repo to EC2 (rsync)
-        uses: burnett01/rsync-deployments@v4
-        with:
-          switches: -avzr --delete
-          path: "./"
-          remote_path: ${{ secrets.EC2_DEPLOY_DIR }}
-          remote_host: ${{ secrets.EC2_HOST }}
-          remote_user: ${{ secrets.EC2_USER }}
-          ssh_private_key: ${{ secrets.EC2_SSH_KEY }}
-          remote_port: ${{ secrets.EC2_SSH_PORT }}
-
-      - name: Run deploy commands on EC2
+      - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_SSH_PORT }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
           script: |
             set -e
+            # move to deploy directory
             cd "${{ secrets.EC2_DEPLOY_DIR }}"
+            # ensure we are on the correct branch and up-to-date
+            git fetch --all --prune
+            git checkout "${{ secrets.BRANCH || env.DEPLOY_BRANCH }}" || true
+            git pull origin "${{ secrets.BRANCH || env.DEPLOY_BRANCH }}" || true
 
-            # Ensure docker is available
+            # make sure docker exists (install if missing)
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
               sudo usermod -aG docker $USER || true
             fi
 
-            # Ensure docker compose plugin exists
+            # ensure docker compose plugin exists
             if ! docker compose version >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker-compose-plugin
             fi
 
-            # Ensure .env exists (create minimal placeholder if missing)
-            if [ ! -f .env ]; then
-              cat > .env <<'EOF'
-SECRET_KEY=replace-me
-DEBUG=False
-POSTGRES_DB=novya
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=12345
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-EOF
-            fi
-
-            # Build and start services (detached)
+            # Build and run containers
             docker compose pull || true
             docker compose up --build -d
 
-            # Run migrations & collectstatic (idempotent)
+            # Run migrations and collectstatic (idempotent)
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
+            # show status
             docker compose ps
