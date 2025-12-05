@@ -1,9 +1,5 @@
 # docker-compose.yml
-# Use images published to GHCR. The placeholder ${GITHUB_OWNER:-your-org} will be replaced
-# during the deploy step on the EC2 host (so the same file can be used elsewhere).
-#
-# Volumes / networks / healthchecks are preserved from your prior file.
-
+# Compose references Docker Hub images (owner placeholder can be replaced during deploy).
 x-db-credentials: &db_env
   POSTGRES_DB: novya
   POSTGRES_USER: postgres
@@ -28,10 +24,9 @@ services:
       timeout: 5s
       retries: 8
 
-  # NOTE: these services reference pre-built images in GHCR.
-  # The deploy script will replace ${GITHUB_OWNER:-your-org} with your org/user.
   backend:
-    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-backend:latest"
+    # images are published to Docker Hub as: <DOCKERHUB_USERNAME>/novya-backend:latest
+    image: "${DOCKERHUB_USERNAME:-yourname}/novya-backend:latest"
     depends_on:
       - postgres
     env_file:
@@ -56,7 +51,7 @@ services:
     entrypoint: ["/app/entrypoint.sh"]
 
   ai_backend:
-    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-ai-backend:latest"
+    image: "${DOCKERHUB_USERNAME:-yourname}/novya-ai-backend:latest"
     depends_on:
       - postgres
       - backend
@@ -76,7 +71,7 @@ services:
       retries: 5
 
   frontend:
-    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-frontend:latest"
+    image: "${DOCKERHUB_USERNAME:-yourname}/novya-frontend:latest"
     depends_on:
       - backend
     ports:
@@ -86,7 +81,7 @@ services:
       - novya_net
 
   backend_test:
-    image: "ghcr.io/${GITHUB_OWNER:-your-org}/novya-backend:latest"
+    image: "${DOCKERHUB_USERNAME:-yourname}/novya-backend:latest"
     env_file:
       - .env
     depends_on:
