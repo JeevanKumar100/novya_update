@@ -1,0 +1,100 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: novya
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "12345"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - novya_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # keep postgres creds consistent with your Django config
+      POSTGRES_DB: novya
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "12345"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      # recommended: Django should read DATABASE_URL or individual vars
+      DATABASE_URL: postgres://postgres:12345@postgres:5432/novya
+      # other envs
+      SECRET_KEY: ${SECRET_KEY:-change-me}
+      DEBUG: ${DEBUG:-False}
+    ports:
+      - "8000:8000"
+    restart: always
+    networks:
+      - novya_net
+
+  ai_backend:
+    build:
+      context: ./backend/ai_backend
+      dockerfile: Dockerfile
+    depends_on:
+      - backend
+      - postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: novya
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "12345"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    ports:
+      - "5000:5000"
+    restart: always
+    networks:
+      - novya_net
+
+  frontend:
+    build:
+      context: ./novya-frontend-main
+      dockerfile: Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    restart: always
+    networks:
+      - novya_net
+
+  backend_test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["python manage.py test --noinput"]
+    networks:
+      - novya_net
+
+volumes:
+  pgdata:
+
+networks:
+  novya_net:
+    driver: bridge
