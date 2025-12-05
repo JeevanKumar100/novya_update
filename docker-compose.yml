@@ -1,5 +1,5 @@
 # docker-compose.yml
-# NOTE: modern docker compose ignores the top-level 'version' field — removed to avoid warnings.
+# NOTE: modern docker compose ignores the top-level 'version' field.
 
 x-db-credentials: &db_env
   POSTGRES_DB: novya
@@ -26,12 +26,8 @@ services:
       retries: 8
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args:
-        # optionally set a pip cache dir or other build args if needed
-        PIP_NO_CACHE_DIR: "1"
+    # Use image pulled from registry (built & pushed by CI).
+    image: ghcr.io/${GITHUB_OWNER:-your-org}/novya-backend:latest
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,9 +53,7 @@ services:
     entrypoint: ["/app/entrypoint.sh"]
 
   ai_backend:
-    build:
-      context: ./backend/ai_backend
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_OWNER:-your-org}/novya-ai-backend:latest
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,13 +75,7 @@ services:
       retries: 5
 
   frontend:
-    build:
-      context: ./novya-frontend-main
-      dockerfile: Dockerfile
-      # DO NOT pass an empty build-arg. If you need to set a specific npm version,
-      # use an explicit value like:
-      # args:
-      #   NPM_VERSION: "11.6.4"
+    image: ghcr.io/${GITHUB_OWNER:-your-org}/novya-frontend:latest
     depends_on:
       - backend
     ports:
@@ -95,21 +83,6 @@ services:
     restart: always
     networks:
       - novya_net
-
-  backend_test:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    env_file:
-      - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["python manage.py test --verbosity=2 --noinput"]
-    networks:
-      - novya_net
-    restart: "no"
 
 volumes:
   pgdata:
