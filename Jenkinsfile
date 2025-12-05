@@ -12,8 +12,8 @@ pipeline {
     stage("Sonarqube Analysis "){
             steps{
                 withSonarQubeEnv('SonarQube') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=novya \
-                    -Dsonar.projectKey=novya '''
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=novya_update \
+                    -Dsonar.projectKey=novya_update '''
                 }
             }
         }
