@@ -140,25 +140,32 @@ jobs:
           script: |
             set -euo pipefail
 
-            # variables from secrets (injected by Actions)
+            # Values are expanded by Actions before sending script to EC2:
             DEPLOY_DIR="${{ secrets.EC2_DEPLOY_DIR }}"
             DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
             DOCKERHUB_TOKEN="${{ secrets.DOCKERHUB_TOKEN }}"
             EC2_REPO_URL="${{ secrets.EC2_REPO_URL }}"
+            DEPLOY_BRANCH="${{ env.DEPLOY_BRANCH }}"
+            BRANCH="${{ secrets.BRANCH }}"
+
+            # Fallback to env DEPLOY_BRANCH if secret BRANCH not set
+            if [ -z "$BRANCH" ]; then
+              BRANCH="${DEPLOY_BRANCH}"
+            fi
 
             if [ -z "$DEPLOY_DIR" ]; then
               echo "EC2_DEPLOY_DIR secret is empty — aborting."
               exit 1
             fi
 
-            # Prepare directory and ownership (best-effort)
+            # Prepare directory & ownership
             sudo mkdir -p "$DEPLOY_DIR"
             CURUSER="$(id -un)"
             CURUID="$(id -u)"
             CURGID="$(id -g)"
             sudo chown -R "${CURUID}:${CURGID}" "$DEPLOY_DIR" || true
 
-            # If repo not present, clone (optional)
+            # If repo not present, clone from EC2_REPO_URL (optional)
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
               if [ -n "$EC2_REPO_URL" ]; then
                 rm -rf "${DEPLOY_DIR:?}"/*
@@ -171,20 +178,15 @@ jobs:
 
             cd "$DEPLOY_DIR"
 
-            # Avoid 'dubious ownership' git error
+            # avoid dubious ownership error
             git config --global --add safe.directory "$DEPLOY_DIR" || true
 
-            # Branch selection: use secret BRANCH if provided, otherwise workflow env DEPLOY_BRANCH
-            BRANCH="${{ secrets.BRANCH }}"
-            if [ -z "$BRANCH" ]; then
-              BRANCH="${DEPLOY_BRANCH}"
-            fi
-
+            # fetch & checkout branch
             git fetch --all --prune || true
             git checkout "$BRANCH" || true
             git pull origin "$BRANCH" || true
 
-            # Ensure docker & compose plugin
+            # ensure docker & compose plugin installed
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update
               sudo apt-get install -y docker.io
@@ -195,25 +197,25 @@ jobs:
               sudo apt-get install -y docker-compose-plugin
             fi
 
-            # Login to Docker Hub (if credentials provided)
+            # Login to Docker Hub on EC2 (if credentials provided)
             if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
               echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             else
-              echo "No Docker Hub credentials provided; will attempt to pull public images only."
+              echo "No Docker Hub credentials provided; attempting to pull public images only."
             fi
 
-            # Replace placeholder in compose file with Docker Hub username (safe)
+            # Replace placeholder owner in compose file with Docker Hub username (safe)
             DOCKERHUB_OWNER="${DOCKERHUB_USERNAME:-your-dockerhub-username}"
             sed -i "s|\${DOCKERHUB_OWNER:-your-dockerhub-username}|${DOCKERHUB_OWNER}|g" docker-compose.yml || true
 
-            # Pull & up
+            # Pull & run containers using images from Docker Hub
             docker compose pull || true
             docker compose up --remove-orphans -d
 
-            # Run migrations and collectstatic (idempotent)
+            # Run migrations & collectstatic
             docker compose run --rm backend python manage.py migrate --noinput || true
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
-            # Show status + images (visible in Actions logs)
+            # Show status and images (printed in Actions logs)
             docker compose ps || true
             docker images | sed -n '1,200p' || true
