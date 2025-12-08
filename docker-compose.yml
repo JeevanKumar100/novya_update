@@ -1,3 +1,4 @@
+cat > docker-compose.yml <<'EOF'
 # docker-compose.yml
 # Uses images from Docker Hub. The placeholder ${DOCKERHUB_OWNER:-your-dockerhub-username}
 # will be replaced on the EC2 host in the deploy script.
@@ -91,3 +92,4 @@ volumes:
 networks:
   novya_net:
     driver: bridge
+EOF
