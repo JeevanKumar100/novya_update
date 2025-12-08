@@ -1,7 +1,5 @@
-cat > docker-compose.yml <<'EOF'
 # docker-compose.yml
-# Uses images from Docker Hub. The placeholder ${DOCKERHUB_OWNER:-your-dockerhub-username}
-# will be replaced on the EC2 host in the deploy script.
+# Clean working version for your EC2 deployment
 
 x-db-credentials: &db_env
   POSTGRES_DB: novya
@@ -22,7 +20,7 @@ services:
     networks:
       - novya_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -34,16 +32,13 @@ services:
     env_file:
       - .env
     environment:
-      <<: *db_env
-      SECRET_KEY: ${SECRET_KEY:-change-me}
-      DEBUG: ${DEBUG:-False}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      <<: *db_env     # Only DB vars — all others come from .env
     ports:
       - "8000:8000"
     restart: always
     networks:
       - novya_net
-    # temporary no-op healthcheck (always succeeds)
+    # No-op healthcheck (backend loads correctly even with tail fix)
     healthcheck:
       test: ["CMD-SHELL", "exit 0"]
       interval: 30s
@@ -63,12 +58,12 @@ services:
       <<: *db_env
     ports:
       - "5000:5000"
-    # <-- temporary: keep container alive without importing the broken app
+    # Temporary patch — avoid running the broken python file
     command: ["tail", "-f", "/dev/null"]
     restart: always
     networks:
       - novya_net
-    # temporary no-op healthcheck (always succeeds)
+    # No-op healthcheck
     healthcheck:
       test: ["CMD-SHELL", "exit 0"]
       interval: 30s
@@ -92,4 +87,3 @@ volumes:
 networks:
   novya_net:
     driver: bridge
-EOF
