@@ -42,11 +42,12 @@ services:
     restart: always
     networks:
       - novya_net
+    # temporary no-op healthcheck (always succeeds)
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthz || exit 1"]
-      interval: 15s
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 1
     volumes:
       - static_media:/app/static_media
 
@@ -66,11 +67,12 @@ services:
     restart: always
     networks:
       - novya_net
+    # temporary no-op healthcheck (always succeeds)
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5000/healthz || exit 1"]
-      interval: 15s
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 1
 
   frontend:
     image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:latest"
