@@ -123,6 +123,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    # expose the image tag produced in build-and-push to the deploy step
+    env:
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -132,6 +135,9 @@ jobs:
 
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v0.1.8
+        # make IMAGE_TAG available to the remote script (expanded client-side)
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
@@ -146,6 +152,7 @@ jobs:
             DOCKERHUB_TOKEN="${{ secrets.DOCKERHUB_TOKEN }}"
             EC2_REPO_URL="${{ secrets.EC2_REPO_URL }}"
             BRANCH="${{ secrets.BRANCH || env.DEPLOY_BRANCH }}"
+            IMAGE_TAG="${IMAGE_TAG:-latest}"
 
             if [ -z "$DEPLOY_DIR" ]; then
               echo "EC2_DEPLOY_DIR secret is empty — aborting."
@@ -200,11 +207,34 @@ jobs:
               echo "No Docker Hub credentials provided; will attempt to pull public images only."
             fi
 
+            # Use your Docker Hub namespace shown in your screenshot
+            DOCKERHUB_OWNER="jeevankumar01"
+
             # Replace placeholder owner in compose with actual Docker Hub username (safe)
-            DOCKERHUB_OWNER="${DOCKERHUB_USERNAME:-your-dockerhub-username}"
             sed -i "s|\${DOCKERHUB_OWNER:-your-dockerhub-username}|${DOCKERHUB_OWNER}|g" docker-compose.yml || true
 
-            # Pull images from Docker Hub and bring up
+            # Pull both the IMAGE_TAG (short SHA) and latest for each image (best-effort)
+            IMAGES=(
+              "${DOCKERHUB_OWNER}/novya-backend:${IMAGE_TAG}"
+              "${DOCKERHUB_OWNER}/novya-backend:latest"
+              "${DOCKERHUB_OWNER}/novya-ai-backend:${IMAGE_TAG}"
+              "${DOCKERHUB_OWNER}/novya-ai-backend:latest"
+              "${DOCKERHUB_OWNER}/novya-frontend:${IMAGE_TAG}"
+              "${DOCKERHUB_OWNER}/novya-frontend:latest"
+            )
+
+            for img in "${IMAGES[@]}"; do
+              echo "Pulling image: $img"
+              docker pull "$img" || echo "Warning: failed to pull $img (may be private or not exist)"
+            done
+
+            # To make docker-compose use the tagged images we just pulled (instead of :latest),
+            # replace occurrences of ":latest" in known image references with ":${IMAGE_TAG}".
+            sed -i "s|${DOCKERHUB_OWNER}/novya-backend:latest|${DOCKERHUB_OWNER}/novya-backend:${IMAGE_TAG}|g" docker-compose.yml || true
+            sed -i "s|${DOCKERHUB_OWNER}/novya-ai-backend:latest|${DOCKERHUB_OWNER}/novya-ai-backend:${IMAGE_TAG}|g" docker-compose.yml || true
+            sed -i "s|${DOCKERHUB_OWNER}/novya-frontend:latest|${DOCKERHUB_OWNER}/novya-frontend:${IMAGE_TAG}|g" docker-compose.yml || true
+
+            # Bring up the stack (will use images available locally if present)
             docker compose pull || true
             docker compose up --remove-orphans -d
 
@@ -213,5 +243,11 @@ jobs:
             docker compose run --rm backend python manage.py collectstatic --noinput || true
 
             # Show status and the images (visible in Actions logs)
+            echo "=== docker compose ps ==="
             docker compose ps || true
+            echo "=== docker ps (running containers) ==="
+            docker ps --format "table {{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}" || true
+            echo "=== docker images (local images) ==="
             docker images | sed -n '1,200p' || true
+
+            echo "Deployed images from Docker Hub owner: ${DOCKERHUB_OWNER} with tag: ${IMAGE_TAG}"
