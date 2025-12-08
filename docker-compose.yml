@@ -1,6 +1,6 @@
-# docker-compose.yml
-# Clean working version for your EC2 deployment
+version: "3.8"
 
+# Use values from .env (DOCKERHUB_OWNER, IMAGE_TAG, etc.)
 x-db-credentials: &db_env
   POSTGRES_DB: novya
   POSTGRES_USER: postgres
@@ -20,25 +20,28 @@ services:
     networks:
       - novya_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 8
 
   backend:
-    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:latest"
+    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:${IMAGE_TAG:-latest}"
     depends_on:
       - postgres
     env_file:
       - .env
     environment:
-      <<: *db_env     # Only DB vars — all others come from .env
+      <<: *db_env
+      SECRET_KEY: ${SECRET_KEY:-change-me}
+      DEBUG: ${DEBUG:-False}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
     ports:
       - "8000:8000"
     restart: always
     networks:
       - novya_net
-    # No-op healthcheck (backend loads correctly even with tail fix)
+    # temporary no-op healthcheck (prevents Docker marking unhealthy while you debug)
     healthcheck:
       test: ["CMD-SHELL", "exit 0"]
       interval: 30s
@@ -48,7 +51,7 @@ services:
       - static_media:/app/static_media
 
   ai_backend:
-    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-ai-backend:latest"
+    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-ai-backend:${IMAGE_TAG:-latest}"
     depends_on:
       - postgres
       - backend
@@ -58,12 +61,10 @@ services:
       <<: *db_env
     ports:
       - "5000:5000"
-    # Temporary patch — avoid running the broken python file
-    command: ["tail", "-f", "/dev/null"]
     restart: always
     networks:
       - novya_net
-    # No-op healthcheck
+    # temporary no-op healthcheck (prevents Docker marking unhealthy while you debug)
     healthcheck:
       test: ["CMD-SHELL", "exit 0"]
       interval: 30s
@@ -71,7 +72,7 @@ services:
       retries: 1
 
   frontend:
-    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:latest"
+    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:${IMAGE_TAG:-latest}"
     depends_on:
       - backend
     ports:
