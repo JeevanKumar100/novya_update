@@ -61,6 +61,10 @@ services:
       <<: *db_env
     ports:
       - "5000:5000"
+    # TEMPORARY WORKAROUND (no code change):
+    # Override the container's entrypoint so the broken Python app isn't imported/executed.
+    # The container stays running and you can still inspect image layers/logs or exec into it.
+    entrypoint: ["tail", "-f", "/dev/null"]
     restart: always
     networks:
       - novya_net
