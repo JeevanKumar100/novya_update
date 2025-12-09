@@ -109,7 +109,7 @@ DATABASES = {
         'NAME': 'novya',  # Your database name
         'USER': 'postgres',
         'PASSWORD': '12345',  # Your PostgreSQL password
-        'HOST': 'localhost',
+        'HOST': '13.217.84.96',
         'PORT': '5432',
     }
 }
