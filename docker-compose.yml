@@ -1,6 +1,5 @@
 version: "3.8"
 
-# Use values from .env (DOCKERHUB_OWNER, IMAGE_TAG, etc.)
 x-db-credentials: &db_env
   POSTGRES_DB: novya
   POSTGRES_USER: postgres
@@ -41,8 +40,8 @@ services:
     restart: always
     networks:
       - novya_net
-    # temporary no-op healthcheck (prevents Docker marking unhealthy while you debug)
     healthcheck:
+      # no-op health (keeps container from being marked unhealthy while debugging)
       test: ["CMD-SHELL", "exit 0"]
       interval: 30s
       timeout: 10s
@@ -61,14 +60,11 @@ services:
       <<: *db_env
     ports:
       - "5000:5000"
-    # TEMPORARY WORKAROUND (no code change):
-    # Override the container's entrypoint so the broken Python app isn't imported/executed.
-    # The container stays running and you can still inspect image layers/logs or exec into it.
-    entrypoint: ["tail", "-f", "/dev/null"]
+    # keep alive without importing broken app (you used this previously)
+    command: ["tail", "-f", "/dev/null"]
     restart: always
     networks:
       - novya_net
-    # temporary no-op healthcheck (prevents Docker marking unhealthy while you debug)
     healthcheck:
       test: ["CMD-SHELL", "exit 0"]
       interval: 30s
