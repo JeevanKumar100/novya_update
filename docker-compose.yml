@@ -1,87 +1,102 @@
 version: "3.8"
 
-x-db-credentials: &db_env
-  POSTGRES_DB: novya
-  POSTGRES_USER: postgres
-  POSTGRES_PASSWORD: "12345"
-  POSTGRES_HOST: postgres
-  POSTGRES_PORT: "5432"
-  DATABASE_URL: "postgres://postgres:12345@postgres:5432/novya"
+# Use .env file for secrets / runtime config
+env_file:
+  - .env
 
 services:
   postgres:
     image: postgres:15
     restart: always
     environment:
-      <<: *db_env
+      POSTGRES_DB: ${POSTGRES_DB:-novya}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-12345}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - novya_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 8
 
-  backend:
-    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-backend:${IMAGE_TAG:-latest}"
-    depends_on:
-      - postgres
-    env_file:
-      - .env
-    environment:
-      <<: *db_env
-      SECRET_KEY: ${SECRET_KEY:-change-me}
-      DEBUG: ${DEBUG:-False}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-    ports:
-      - "8000:8000"
+  redis:
+    image: redis:6
     restart: always
     networks:
       - novya_net
-    # Healthcheck uses the root (/) endpoint which returns 200 in this app
+
+  novya-backend:
+    # Use built image if you prefer, or build from repo. Replace image with your DockerHub image if used.
+    # image: "jeevankumar01/novya-backend:${IMAGE_TAG:-latest}"
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      - postgres
+      - redis
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: ${DEBUG}
+    command: >
+      sh -c "
+        python manage.py migrate --noinput &&
+        python manage.py collectstatic --noinput &&
+        gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
+      "
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - novya_net
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
-      interval: 15s
+      interval: 30s
       timeout: 10s
       retries: 3
     volumes:
       - static_media:/app/static_media
 
-  # Keep AI container present but do NOT publish port 5000 until the image is fixed.
-  # This avoids broken process crashes being visible and avoids public connection-refused on :5000.
-  ai_backend:
-    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-ai-backend:${IMAGE_TAG:-latest}"
-    depends_on:
-      - postgres
-      - backend
+  novya-ai-backend:
+    # If you have a built image on Docker Hub use image: ... otherwise build:
+    # image: "jeevankumar01/novya-ai-backend:${IMAGE_TAG:-latest}"
+    build:
+      context: ./backend/ai_backend
+      dockerfile: Dockerfile
     env_file:
       - .env
     environment:
-      <<: *db_env
-    # Do not expose 5000 publicly while this image is broken.
+      AI_API_KEY: ${AI_API_KEY}
+    # IMPORTANT: The AI service listens inside container on port 5000.
+    # We expose the container port 5000 to host 5000 so frontend or other services can call it.
     ports:
-     - "5000:5000"
-    # Keep container alive without running the (broken) app so it doesn't constantly restart.
-    command: ["tail", "-f", "/dev/null"]
-    restart: "no"
+      - "5000:5000"
+    restart: unless-stopped
     networks:
       - novya_net
     healthcheck:
-      # no-op healthcheck while AI is disabled
-      test: ["CMD-SHELL", "exit 0"]
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 1
+      retries: 3
 
-  frontend:
-    image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:${IMAGE_TAG:-latest}"
-    depends_on:
-      - backend
+  novya-frontend:
+    # image: "jeevankumar01/novya-frontend:${IMAGE_TAG:-latest}"
+    build:
+      context: ./novya-frontend-main
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      REACT_APP_API_BASE: ${FRONTEND_API_BASE}
     ports:
       - "80:80"
-    restart: always
+    restart: unless-stopped
     networks:
       - novya_net
 
