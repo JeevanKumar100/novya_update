@@ -61,8 +61,8 @@ services:
     environment:
       <<: *db_env
     # Do not expose 5000 publicly while this image is broken.
-    # ports:
-    #   - "5000:5000"
+    ports:
+     - "5000:5000"
     # Keep container alive without running the (broken) app so it doesn't constantly restart.
     command: ["tail", "-f", "/dev/null"]
     restart: "no"
