@@ -32,20 +32,17 @@ services:
       - .env
     environment:
       <<: *db_env
-      SECRET_KEY: ${SECRET_KEY:-change-me}
-      DEBUG: ${DEBUG:-False}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,13.217.84.96}
+      # ALLOWED_HOSTS is read from .env
     ports:
       - "8000:8000"
     restart: always
     networks:
       - novya_net
     healthcheck:
-      # no-op health (keeps container from being marked unhealthy while debugging)
-      test: ["CMD-SHELL", "exit 0"]
-      interval: 30s
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
+      interval: 15s
       timeout: 10s
-      retries: 1
+      retries: 5
     volumes:
       - static_media:/app/static_media
 
@@ -60,21 +57,21 @@ services:
       <<: *db_env
     ports:
       - "5000:5000"
-    # keep alive without importing broken app (you used this previously)
-    command: ["tail", "-f", "/dev/null"]
     restart: always
     networks:
       - novya_net
     healthcheck:
-      test: ["CMD-SHELL", "exit 0"]
-      interval: 30s
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
+      interval: 15s
       timeout: 10s
-      retries: 1
+      retries: 5
 
   frontend:
     image: "${DOCKERHUB_OWNER:-your-dockerhub-username}/novya-frontend:${IMAGE_TAG:-latest}"
     depends_on:
       - backend
+    env_file:
+      - .env
     ports:
       - "80:80"
     restart: always
