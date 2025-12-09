@@ -7,8 +7,8 @@
  */
 
 // Backend URLs
-const DJANGO_BASE_URL = process.env.REACT_APP_DJANGO_URL || 'http://localhost:8001/api';
-const FASTAPI_BASE_URL = process.env.REACT_APP_FASTAPI_URL || 'http://localhost:8000';
+const DJANGO_BASE_URL = process.env.REACT_APP_DJANGO_URL || 'http://13.217.84.96:8001/api';
+const FASTAPI_BASE_URL = process.env.REACT_APP_FASTAPI_URL || 'http://13.217.84.96:8000';
 
 /**
  * Return the child email stored during parent login (if applicable)
