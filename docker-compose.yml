@@ -1,5 +1,97 @@
 version: "3.8"
 
+# Load runtime secrets from .env
+env_file:
+  - .env
+
+services:
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - novya_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  redis:
+    image: redis:6
+    restart: always
+    networks:
+      - novya_net
+
+  backend:
+    image: "${DOCKERHUB_OWNER}/novya-backend:${IMAGE_TAG}"
+    depends_on:
+      - postgres
+      - redis
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: ${DEBUG}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - novya_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - static_media:/app/static_media
+
+  ai_backend:
+    image: "${DOCKERHUB_OWNER}/novya-ai-backend:${IMAGE_TAG}"
+    env_file:
+      - .env
+    environment:
+      AI_API_KEY: ${AI_API_KEY}
+      DATABASE_URL: ${DATABASE_URL}
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    networks:
+      - novya_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    image: "${DOCKERHUB_OWNER}/novya-frontend:${IMAGE_TAG}"
+    env_file:
+      - .env
+    environment:
+      REACT_APP_API_BASE: ${FRONTEND_API_BASE}
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    networks:
+      - novya_net
+
+volumes:
+  pgdata:
+  static_media:
+
+networks:
+  novya_net:
+    driver: bridge
+version: "3.8"
+
 # NOTE:
 # - Secrets (AI_API_KEY, SECRET_KEY) should be provided at runtime via an .env file
 #   (example: created temporarily by Jenkins in the workspace) or via environment.
