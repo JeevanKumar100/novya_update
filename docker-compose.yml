@@ -1,17 +1,17 @@
 version: "3.8"
 
-# Use .env file for secrets / runtime config
-env_file:
-  - .env
-
 services:
   postgres:
     image: postgres:15
     restart: always
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-novya}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-12345}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -25,15 +25,17 @@ services:
   redis:
     image: redis:6
     restart: always
+    env_file:
+      - .env
     networks:
       - novya_net
 
   novya-backend:
-    # Use built image if you prefer, or build from repo. Replace image with your DockerHub image if used.
-    # image: "jeevankumar01/novya-backend:${IMAGE_TAG:-latest}"
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    # use either image (from Docker Hub) or build() - choose one
+    image: "${DOCKERHUB_OWNER:-jeevankumar01}/novya-backend:${IMAGE_TAG:-latest}"
+    # build:
+    #   context: ./backend
+    #   dockerfile: Dockerfile
     depends_on:
       - postgres
       - redis
@@ -63,17 +65,13 @@ services:
       - static_media:/app/static_media
 
   novya-ai-backend:
-    # If you have a built image on Docker Hub use image: ... otherwise build:
-    # image: "jeevankumar01/novya-ai-backend:${IMAGE_TAG:-latest}"
-    build:
-      context: ./backend/ai_backend
-      dockerfile: Dockerfile
+    image: "${DOCKERHUB_OWNER:-jeevankumar01}/novya-ai-backend:${IMAGE_TAG:-latest}"
+    # build:
+    #   context: ./backend/ai_backend
     env_file:
       - .env
     environment:
       AI_API_KEY: ${AI_API_KEY}
-    # IMPORTANT: The AI service listens inside container on port 5000.
-    # We expose the container port 5000 to host 5000 so frontend or other services can call it.
     ports:
       - "5000:5000"
     restart: unless-stopped
@@ -86,10 +84,9 @@ services:
       retries: 3
 
   novya-frontend:
-    # image: "jeevankumar01/novya-frontend:${IMAGE_TAG:-latest}"
-    build:
-      context: ./novya-frontend-main
-      dockerfile: Dockerfile
+    image: "${DOCKERHUB_OWNER:-jeevankumar01}/novya-frontend:${IMAGE_TAG:-latest}"
+    # build:
+    #   context: ./novya-frontend-main
     env_file:
       - .env
     environment:
